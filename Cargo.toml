@@ -1,0 +1,10 @@
+[package]
+name = "nucleon"
+version = "0.0.1"
+authors = ["Nicolas Le Manchet <nicolas@lemanchet.fr>"]
+
+[dependencies]
+log = "0.3.1"
+argparse = "0.2.1"
+mio = "0.4.3"
+redis = "0.5.1"
