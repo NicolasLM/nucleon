@@ -2,7 +2,7 @@ Nucleon
 =======
 
 Nucleon is a dynamic TCP load balancer written in Rust. It has the ability to
-insert and remove backend servers on the flight. To do that it leverages [Redis
+insert and remove backend servers on the fly. To do that it leverages [Redis
 Pub/Sub](http://redis.io/topics/pubsub) mechanism. Adding or removing a server
 to a cluster is as easy as publishing a message to Redis.
 
