@@ -1,11 +1,11 @@
 extern crate log;
 
-use log::{LogRecord, LogLevel, LogMetadata, SetLoggerError, LogLevelFilter};
+use log::{LogRecord, LogMetadata, SetLoggerError, LogLevelFilter};
 
 struct SimpleLogger;
 
 impl log::Log for SimpleLogger {
-    fn enabled(&self, metadata: &LogMetadata) -> bool {
+    fn enabled(&self, _metadata: &LogMetadata) -> bool {
         // Todo: implement this or use an existing library
         true
     }

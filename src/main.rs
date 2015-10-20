@@ -53,7 +53,7 @@ fn main() {
         exit(1);
     }
 
-    let mut backend = Arc::new(Mutex::new(
+    let backend = Arc::new(Mutex::new(
         backend::RoundRobinBackend::new(servers).unwrap()
     ));
 
