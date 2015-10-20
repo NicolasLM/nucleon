@@ -18,6 +18,7 @@ use backend::{RoundRobinBackend, GetBackend};
 const BUFFER_SIZE: usize = 8192;
 const MAX_BUFFERS_PER_CONNECTION: usize = 16;
 const MAX_CONNECTIONS: usize = 512;
+const CONNECT_TIMEOUT_MS: usize = 1000;
 
 pub struct Proxy {
     // socket where incoming connections arrive
@@ -117,11 +118,25 @@ impl Proxy {
         }
     }
 
+    /// Handle a write event from the event loop
+    ///
+    /// We assume that getting a write event means the TCP connection
+    /// phase is finished.
+    fn handle_write_event(&mut self, event_loop: &mut EventLoop<Proxy>, token: Token) {
+        if !self.connections[token].connected {
+            self.connections[token].connected = true; 
+            match self.connections[token].sock.peer_addr() {
+                Ok(addr) => info!("Connected to backend server {}", addr),
+                Err(_) => warn!("Connected to unknonw backend server, this is odd")
+            }
+        }
+        self.flush_send_queue(event_loop, token);
+    }
+
     /// Flush the send queue of a token
     ///
     /// Drop the connection if we sent everything and other end is gone
-    fn handle_write_event(&mut self, event_loop: &mut EventLoop<Proxy>,
-                          token: Token) {
+    fn flush_send_queue(&mut self, event_loop: &mut EventLoop<Proxy>, token: Token) {
         match self.connections[token].write() {
             Ok(flushed_everything) => {
                 if flushed_everything {
@@ -178,10 +193,8 @@ impl Proxy {
             Ok(client_addr) => info!("New client connection from {}", client_addr),
             Err(_) => info!("New client connection from unknown source")
         }
-        let backend_socket_addr = self.backend.lock().unwrap().get().unwrap();
-        let backend_sock = match TcpStream::connect(&backend_socket_addr) {
+        let backend_sock = match self.connect_to_backend_server() {
             Ok(backend_sock) => {
-                info!("Connected to backend {}", backend_socket_addr);
                 backend_sock
             },
             Err(e) => {
@@ -189,14 +202,20 @@ impl Proxy {
                 return false;
             }
         };
-        let client_token = self.create_connection_from_sock(client_sock, event_loop);
-        let backend_token = self.create_connection_from_sock(backend_sock, event_loop);
+        let client_token = self.create_connection_from_sock(client_sock, true, event_loop);
+        let backend_token = self.create_connection_from_sock(backend_sock, false, event_loop);
         match client_token {
             Some(client_token) => {
                 match backend_token {
                     Some(backend_token) => {
                         self.link_connections_together(client_token, backend_token,
                                                        event_loop);
+                        // Register a timeout on the backend server socket
+                        let timeout = event_loop.timeout_ms(
+                            backend_token.as_usize(),
+                            CONNECT_TIMEOUT_MS as u64
+                        ).unwrap();
+                        self.connections[backend_token].timeout = Some(timeout);
                     },
                     None => {
                         error!("Cannot create backend Connection, dropping client");
@@ -224,12 +243,18 @@ impl Proxy {
 
     }
 
+    /// Create a new TCP socket to a backend server
+    fn connect_to_backend_server(&mut self) -> io::Result<TcpStream> {
+        let backend_socket_addr = self.backend.lock().unwrap().get().unwrap();
+        TcpStream::connect(&backend_socket_addr)
+    }
+
     /// Create a Connection instance from a socket
-    fn create_connection_from_sock(&mut self, sock: TcpStream,
+    fn create_connection_from_sock(&mut self, sock: TcpStream, already_connected: bool,
                                    event_loop: &mut EventLoop<Proxy>) -> Option<Token> {
         self.connections.insert_with(|token| {
             info!("Creating Connection with {:?}", token);
-            let mut connection = Connection::new(sock, token);
+            let mut connection = Connection::new(sock, token, already_connected);
             connection.register(event_loop).unwrap();
             connection
         })
@@ -248,6 +273,7 @@ impl Proxy {
         // we can register to Read events.
         self.connections[client_token].interest.insert(EventSet::readable());
         self.connections[backend_token].interest.insert(EventSet::readable());
+        self.connections[backend_token].interest.insert(EventSet::writable());
         self.connections[client_token].reregister(event_loop).unwrap();
         self.connections[backend_token].reregister(event_loop).unwrap();
     }
@@ -284,11 +310,52 @@ impl Proxy {
     fn find_connection_by_token<'a>(&'a mut self, token: Token) -> &'a mut Connection {
         &mut self.connections[token]
     }
+
+    /// Try to connect to the next backend server
+    ///
+    /// Resets the timeout to prevent multiple timeouts to be set concurrently.
+    fn try_next_server(&mut self, event_loop: &mut EventLoop<Proxy>, token: Token) {
+        match self.connections[token].timeout {
+            Some(timeout) => {
+                event_loop.clear_timeout(timeout);
+                self.connections[token].timeout = None;
+            },
+            None => {}
+        };
+        self.connections[token].deregister(event_loop).unwrap();
+        self.connections[token].sock = match self.connect_to_backend_server() {
+            Ok(backend_sock) => {
+                backend_sock
+            },
+            Err(e) => {
+                // Todo: drop connections
+                error!("Could not connect to backend: {}", e);
+                return;
+            }
+        };
+        self.connections[token].register(event_loop).unwrap();
+        // Register another timeout on the backend server socket
+        // in case the new backend server is also unavailable
+        let timeout = event_loop.timeout_ms(token.as_usize(),
+                                            CONNECT_TIMEOUT_MS as u64).unwrap();
+        self.connections[token].timeout = Some(timeout);
+    }
 }
 
 impl Handler for Proxy {
-    type Timeout = ();
+    type Timeout = usize;
     type Message = ();
+
+    /// Method called when a timeout is fired
+    ///
+    /// Only used for backend server connection timeout
+    fn timeout(&mut self, event_loop: &mut EventLoop<Proxy>, timeout: usize) {
+        let token = Token(timeout);
+        if self.connections.contains(token) && !self.connections[token].connected {
+            warn!("Connect to backend server timeout");
+            self.try_next_server(event_loop, token);
+        }
+    }
 
     /// Method called when a event from the event loop is notified 
     fn ready(&mut self, event_loop: &mut EventLoop<Proxy>, token: Token, events: EventSet) {
@@ -305,7 +372,14 @@ impl Handler for Proxy {
         
         if events.is_error() {
             debug!("Got an error on {:?}", token);
-            self.terminate_connection(event_loop, token);
+            if !self.connections[token].connected {
+                // Got an error while connecting to a backend server?
+                // Let's try the next one.
+                warn!("Connect to backend server failed");
+                self.try_next_server(event_loop, token);
+            } else {
+                self.terminate_connection(event_loop, token);
+            }
             return;
         }
 
@@ -350,6 +424,12 @@ struct Connection {
    
     // other end of the tunnel
     end_token: Option<Token>,
+
+    // is the socket connected already or waiting for answer?
+    connected: bool,
+
+    // store timeout when connecting to a server backend
+    timeout: Option<mio::Timeout>
 }
 
 impl Drop for Connection {
@@ -359,7 +439,7 @@ impl Drop for Connection {
 }
 
 impl Connection {
-    fn new(sock: TcpStream, token: Token) -> Connection {
+    fn new(sock: TcpStream, token: Token, connected: bool) -> Connection {
         Connection {
             sock: sock,
             token: token,
@@ -373,7 +453,11 @@ impl Connection {
             send_queue: VecDeque::with_capacity(MAX_BUFFERS_PER_CONNECTION),
 
             // When instanciated a Connection does not have yet an other end
-            end_token: None 
+            end_token: None,
+
+            connected: connected,
+
+            timeout: None
         }
     }
 
