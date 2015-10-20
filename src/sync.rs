@@ -11,7 +11,7 @@ pub fn create_sync_thread(backend: Arc<Mutex<RoundRobinBackend>>,
         let pubsub = subscribe_to_redis(&redis_url).unwrap();
         loop {
             let msg = pubsub.get_message().unwrap();
-            handle_message(backend.clone(), msg);
+            handle_message(backend.clone(), msg).unwrap();
         }
     });
 }
