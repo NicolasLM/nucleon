@@ -1,14 +1,15 @@
 #[macro_use] extern crate log;
+extern crate env_logger;
 extern crate argparse;
 extern crate mio;
 
 mod backend;
 mod sync;
 mod tcplb;
-mod simplelogger;
 
 use std::sync::{Arc, Mutex};
 use std::process::exit;
+use std::env;
 
 use argparse::{ArgumentParser, StoreTrue, Store, Collect};
 use mio::*;
@@ -46,7 +47,9 @@ fn main() {
         ap.parse_args_or_exit();
     }
 
-    simplelogger::init(&log_level).ok().expect("Failed to init logger");
+    env::set_var("RUST_LOG", log_level);
+
+    env_logger::init().unwrap();
 
     if servers.is_empty() {
         println!("Need at least one server to load balance");
