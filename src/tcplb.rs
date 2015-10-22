@@ -70,7 +70,13 @@ impl Proxy {
     /// queue is full.
     fn read_token(&mut self, event_loop: &mut EventLoop<Proxy>,
                          token: Token) -> io::Result<bool> {
-        let other_end_token = self.connections[token].end_token.unwrap();
+        let other_end_token = match self.connections[token].end_token {
+            Some(other_end_token) => other_end_token,
+            None => {
+                warn!("Attempting to read a token with no other end");
+                return Err(io::Error::new(io::ErrorKind::Other, "No other end"));
+            }
+        };
         let buffers_to_read =
             MAX_BUFFERS_PER_CONNECTION - self.connections[other_end_token].send_queue.len();
         let (exhausted_kernel, messages) = try!(
@@ -110,7 +116,10 @@ impl Proxy {
                                 self.readable_tokens.push_back(token);
                             }
                         },
-                        Err(e) => panic!("Error while reading {:?}: {}", token, e)
+                        Err(e) => {
+                            warn!("Error while reading {:?}: {}", token, e);
+                            self.terminate_connection(event_loop, token);
+                        }
                     }
                 },
                 None => break
@@ -283,12 +292,15 @@ impl Proxy {
     /// Makes sure to flush all pending queues before dropping the other end
     /// of a connection.
     fn terminate_connection(&mut self, event_loop: &mut EventLoop<Proxy>, token: Token) {
+        if !self.connections.contains(token) {
+            warn!("Attempting to terminate an already gone connection");
+            return;
+        }
         match self.connections[token].end_token {
             Some(end_token) => {
                 if self.connections[end_token].send_queue.is_empty() {
                     // Nothing to write on the other end, we can drop it
-                    self.connections[end_token].deregister(event_loop).unwrap();
-                    self.connections.remove(end_token);
+                    self.destroy_connection(event_loop, end_token);
                 } else {
                     // We still need to write things in the other end
                     // just stop reading it and we will terminate it 
@@ -302,6 +314,21 @@ impl Proxy {
             },
             None => {}
         }
+        self.destroy_connection(event_loop, token);
+    }
+
+    /// Clean the environment and drop connection
+    ///
+    /// While terminate_connection() handles corner cases, this method does not, it
+    /// only cleans and drops.
+    fn destroy_connection(&mut self, event_loop: &mut EventLoop<Proxy>, token: Token) {
+        match self.connections[token].timeout {
+            Some(timeout) => {
+                event_loop.clear_timeout(timeout);
+                self.connections[token].timeout = None;
+            },
+            None => {}
+        };
         self.connections[token].deregister(event_loop).unwrap();
         self.connections.remove(token);
     }
@@ -369,6 +396,11 @@ impl Handler for Proxy {
                   self.connections.count());
             return;
         }
+
+        if !self.connections.contains(token) {
+            warn!("Got an event on a gone token");
+            return;
+        }
         
         if events.is_error() {
             debug!("Got an error on {:?}", token);
@@ -392,8 +424,10 @@ impl Handler for Proxy {
             debug!("Got a read hang up on {:?}", token);
             // bypass the readable tokens queue, let's read until kernel
             // is exhausted and drop the connection
-            self.read_token(event_loop, token).unwrap();
-            self.terminate_connection(event_loop, token);
+            match self.read_token(event_loop, token) {
+                Ok(_) => self.terminate_connection(event_loop, token),
+                Err(_) => self.terminate_connection(event_loop, token)
+            };
         } else if events.is_readable() {
             debug!("Got a read event on {:?}", token);
             self.push_to_readable_tokens(event_loop, token);
