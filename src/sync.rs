@@ -5,8 +5,7 @@ use std::thread;
 
 use backend::{RoundRobinBackend, GetBackend};
 
-pub fn create_sync_thread(backend: Arc<Mutex<RoundRobinBackend>>,
-                          redis_url: String) {
+pub fn create_sync_thread(backend: Arc<Mutex<RoundRobinBackend>>, redis_url: String) {
     thread::spawn(move || {
         let pubsub = subscribe_to_redis(&redis_url).unwrap();
         loop {
@@ -25,27 +24,29 @@ fn subscribe_to_redis(url: &str) -> redis::RedisResult<redis::PubSub> {
     Ok(pubsub)
 }
 
-fn handle_message(backend: Arc<Mutex<RoundRobinBackend>>, msg: redis::Msg) -> redis::RedisResult<()> {
+fn handle_message(backend: Arc<Mutex<RoundRobinBackend>>,
+                  msg: redis::Msg)
+                  -> redis::RedisResult<()> {
     let channel = msg.get_channel_name();
     let payload: String = try!(msg.get_payload());
     debug!("New message on Redis channel {}: '{}'", channel, payload);
 
     match channel {
         "backend_add" => {
-            let mut backend = backend.lock().unwrap(); 
+            let mut backend = backend.lock().unwrap();
             match backend.add(&payload) {
                 Ok(_) => info!("Added new server {}", payload),
                 _ => {}
-            };
-        },
+            }
+        }
         "backend_remove" => {
-            let mut backend = backend.lock().unwrap(); 
+            let mut backend = backend.lock().unwrap();
             match backend.remove(&payload) {
                 Ok(_) => info!("Removed server {}", payload),
                 _ => {}
-            };
-        },
-        _ => info!("Cannot parse Redis message")
-    };
+            }
+        }
+        _ => info!("Cannot parse Redis message"),
+    }
     Ok(())
 }
