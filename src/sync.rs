@@ -7,7 +7,9 @@ use crate::backend::{RoundRobinBackend, GetBackend};
 
 pub fn create_sync_thread(backend: Arc<Mutex<RoundRobinBackend>>, redis_url: String) {
     thread::spawn(move || {
-        let pubsub = subscribe_to_redis(&redis_url).unwrap();
+        let mut connection = redis::Client::open(redis_url).unwrap().get_connection().unwrap();
+        let mut pubsub: redis::PubSub = connection.as_pubsub();
+        subscribe_to_redis(&mut pubsub).unwrap();
         loop {
             let msg = pubsub.get_message().unwrap();
             handle_message(backend.clone(), msg).unwrap();
@@ -15,13 +17,11 @@ pub fn create_sync_thread(backend: Arc<Mutex<RoundRobinBackend>>, redis_url: Str
     });
 }
 
-fn subscribe_to_redis(url: &str) -> redis::RedisResult<redis::PubSub> {
-    let client = redis::Client::open(url)?;
-    let mut pubsub: redis::PubSub = client.get_pubsub()?;
+fn subscribe_to_redis(pubsub: &mut redis::PubSub) -> redis::RedisResult<()> {
     pubsub.subscribe("backend_add")?;
     pubsub.subscribe("backend_remove")?;
     info!("Subscribed to Redis channels 'backend_add' and 'backend_remove'");
-    Ok(pubsub)
+    Ok(())
 }
 
 fn handle_message(backend: Arc<Mutex<RoundRobinBackend>>,

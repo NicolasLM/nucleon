@@ -8,5 +8,5 @@ authors = ["Nicolas Le Manchet <nicolas@lemanchet.fr>"]
 log = "0.4.20"
 argparse = "0.2.1"
 mio = "0.4.3"
-redis = "0.5.1"
+redis = "0.23.2"
 env_logger = "0.10.0"
