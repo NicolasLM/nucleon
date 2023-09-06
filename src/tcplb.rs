@@ -13,7 +13,7 @@ use mio::util::Slab;
 use std::collections::VecDeque;
 use std::ops::Drop;
 
-use backend::{RoundRobinBackend, GetBackend};
+use crate::backend::{RoundRobinBackend, GetBackend};
 
 const BUFFER_SIZE: usize = 8192;
 const MAX_BUFFERS_PER_CONNECTION: usize = 16;

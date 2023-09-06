@@ -3,7 +3,7 @@ extern crate redis;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use backend::{RoundRobinBackend, GetBackend};
+use crate::backend::{RoundRobinBackend, GetBackend};
 
 pub fn create_sync_thread(backend: Arc<Mutex<RoundRobinBackend>>, redis_url: String) {
     thread::spawn(move || {
