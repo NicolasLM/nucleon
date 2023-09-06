@@ -13,7 +13,7 @@ use mio::util::Slab;
 use std::collections::VecDeque;
 use std::ops::Drop;
 
-use backend::{RoundRobinBackend, GetBackend};
+use crate::backend::{RoundRobinBackend, GetBackend};
 
 const BUFFER_SIZE: usize = 8192;
 const MAX_BUFFERS_PER_CONNECTION: usize = 16;
@@ -79,8 +79,8 @@ impl Proxy {
         };
         let buffers_to_read = MAX_BUFFERS_PER_CONNECTION -
                               self.connections[other_end_token].send_queue.len();
-        let (exhausted_kernel, messages) = try!(self.find_connection_by_token(token)
-                                                    .read(buffers_to_read));
+        let (exhausted_kernel, messages) = self.find_connection_by_token(token)
+                                                    .read(buffers_to_read)?;
         // let's not tell we have something to write if we don't
         if messages.is_empty() {
             return Ok(exhausted_kernel);
@@ -549,7 +549,7 @@ impl Connection {
     /// Returns true when everything is flushed, false otherwise
     fn write(&mut self) -> io::Result<bool> {
         while !self.send_queue.is_empty() {
-            let wrote_everything = try!(self.write_one_buf());
+            let wrote_everything = self.write_one_buf()?;
             if !wrote_everything {
                 // Kernel did not accept all our data, let's keep
                 // interest on write events so we get notified when
