@@ -49,7 +49,7 @@ fn main() {
 
     env::set_var("RUST_LOG", log_level);
 
-    env_logger::init().unwrap();
+    env_logger::init();
 
     if servers.is_empty() {
         println!("Need at least one server to load balance");
