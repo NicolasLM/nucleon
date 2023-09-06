@@ -16,7 +16,7 @@ impl RoundRobinBackend {
     pub fn new(backends_str: Vec<String>) -> Result<RoundRobinBackend, AddrParseError> {
         let mut backends = Vec::new();
         for backend_str in backends_str {
-            let backend_socket_addr: SocketAddr = try!(FromStr::from_str(&backend_str));
+            let backend_socket_addr: SocketAddr = FromStr::from_str(&backend_str)?;
             backends.push(backend_socket_addr);
             info!("Load balancing server {:?}", backend_socket_addr);
         }
@@ -37,13 +37,13 @@ impl GetBackend for RoundRobinBackend {
     }
 
     fn add(&mut self, backend_str: &str) -> Result<(), AddrParseError> {
-        let backend_socket_addr: SocketAddr = try!(FromStr::from_str(&backend_str));
+        let backend_socket_addr: SocketAddr = FromStr::from_str(&backend_str)?;
         self.backends.push(backend_socket_addr);
         Ok(())
     }
 
     fn remove(&mut self, backend_str: &str) -> Result<(), AddrParseError> {
-        let backend_socket_addr: SocketAddr = try!(FromStr::from_str(&backend_str));
+        let backend_socket_addr: SocketAddr = FromStr::from_str(&backend_str)?;
         self.backends.retain(|&x| x != backend_socket_addr);
         Ok(())
     }
